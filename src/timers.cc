@@ -29,6 +29,10 @@ void GetLibuvNow(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(env->GetNow());
 }
 
+////
+////
+
+
 void ScheduleTimer(const FunctionCallbackInfo<Value>& args) {
   auto env = Environment::GetCurrent(args);
   env->ScheduleTimer(args[0]->IntegerValue(env->context()).FromJust());
@@ -48,6 +52,8 @@ void Initialize(Local<Object> target,
                        void* priv) {
   Environment* env = Environment::GetCurrent(context);
 
+  ////
+  ////
   env->SetMethod(target, "getLibuvNow", GetLibuvNow);
   env->SetMethod(target, "setupTimers", SetupTimers);
   env->SetMethod(target, "scheduleTimer", ScheduleTimer);
@@ -60,6 +66,8 @@ void Initialize(Local<Object> target,
 }
 }  // anonymous namespace
 void RegisterTimerExternalReferences(ExternalReferenceRegistry* registry) {
+  ////
+  ////
   registry->Register(GetLibuvNow);
   registry->Register(SetupTimers);
   registry->Register(ScheduleTimer);
