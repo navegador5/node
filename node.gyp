@@ -32,6 +32,10 @@
     'node_builtin_modules_path%': '',
     'library_files': [
       'lib/nv_tool.js',
+      'lib/html/tree/util.js',
+      'lib/html/tree/cmmn.js',
+      'lib/html/tree/ndfunc.js',
+      'lib/html/tree/ndcls.js',
       'lib/internal/bootstrap/environment.js',
       'lib/internal/bootstrap/loaders.js',
       'lib/internal/bootstrap/node.js',
