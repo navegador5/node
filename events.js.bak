@@ -1,14 +1,10 @@
 'use strict';
 
 const {
-  ReflectOwnKeys,
-} = primordials;
-
-const {
+    construct,
     defineProperty,
     definePrototypeProperty,
     setMaxListeners,
-    construct,
     listenerCount,
     setMaxListenersMethod,
     _getMaxListeners,
@@ -23,6 +19,11 @@ const {
     on,
     getEventListeners,
 } = require("events_util");
+
+
+const {
+  ReflectOwnKeys,
+} = primordials;
 
 
 function EventEmitter(opts) {construct(EventEmitter,this,opts)}
@@ -46,17 +47,17 @@ function factorize() {
         return(setMaxListenersMethod(this,n))
     }
     EventEmitter.prototype.getMaxListeners = function getMaxListeners() {
-        return _getMaxListeners(this,EventEmitter)
+        return _getMaxListeners(this)
     }
     EventEmitter.prototype.emit = function emit(type, ...args) {
         return(_emit(EventEmitter,this,type,...args))
     }
     EventEmitter.prototype.addListener = function addListener(type, listener) {
-        return _addListener(this, type, listener, false,EventEmitter);
+        return _addListener(this, type, listener, false);
     };
     EventEmitter.prototype.on = EventEmitter.prototype.addListener;
     EventEmitter.prototype.prependListener = function prependListener(type, listener) {
-          return _addListener(this, type, listener, true,EventEmitter);
+          return _addListener(this, type, listener, true);
     };
     EventEmitter.prototype.once = function once(type, listener) {
       checkListener(listener);
@@ -78,7 +79,7 @@ function factorize() {
     EventEmitter.prototype.listeners = function listeners(type) {
       return _listeners(this, type, true);
     };
-
+    
     EventEmitter.prototype.rawListeners = function rawListeners(type) {
       return _listeners(this, type, false);
     };
@@ -96,5 +97,6 @@ module.exports = EventEmitter;
 module.exports.once = once;
 module.exports.on = on;
 module.exports.getEventListeners = getEventListeners;
+
 
 

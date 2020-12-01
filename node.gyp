@@ -58,6 +58,7 @@
       'lib/dns/promises.js',
       'lib/domain.js',
       'lib/events.js',
+      'lib/events_util.js',
       'lib/fs.js',
       'lib/fs/promises.js',
       'lib/http.js',
