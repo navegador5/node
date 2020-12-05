@@ -4062,6 +4062,7 @@ void Isolate::FireCallCompletedCallback(MicrotaskQueue* microtask_queue) {
       microtask_queue &&
       microtask_queue->microtasks_policy() == v8::MicrotasksPolicy::kAuto;
 
+
   v8::Isolate* isolate = reinterpret_cast<v8::Isolate*>(this);
   if (perform_checkpoint) microtask_queue->PerformCheckpoint(isolate);
 

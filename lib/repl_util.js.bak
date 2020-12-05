@@ -1,0 +1,506 @@
+const {
+    ObjectDefineProperty,
+    ArrayPrototypeShift,
+    RegExpPrototypeTest,
+    StringPrototypeIncludes,
+    StringPrototypeTrim,
+    ObjectSetPrototypeOf,
+    SyntaxErrorPrototype,
+    SyntaxError,
+    ArrayPrototypeJoin,
+    RegExp,
+} = primordials;
+
+
+
+const {
+  codes: {
+    ERR_INVALID_REPL_INPUT,
+    ERR_INVALID_REPL_EVAL_CONFIG,
+    ERR_CANNOT_WATCH_SIGINT,
+  },
+} = require('internal/errors');
+
+
+const {
+  startSigintWatchdog,
+  stopSigintWatchdog
+} = internalBinding('contextify');
+
+const {
+    deprecate
+} = require('internal/util');
+
+const path = require("path");
+const vm = require('vm');
+const asyncESM = require('internal/process/esm_loader');
+
+
+const { getOptionValue } = require('internal/options');
+const pendingDeprecation = getOptionValue('--pending-deprecation');
+
+
+const {
+    kStandaloneREPL,
+    isRecoverableError,
+} = require('internal/repl/utils');
+
+
+const CJSModule = require('internal/modules/cjs/loader').Module;
+let _builtinLibs = [...CJSModule.builtinModules].filter((e) => !e.startsWith('_') && !e.includes('/'));
+
+
+const kContextId = Symbol('contextId');
+const domainSet = new WeakSet();
+const domain = require('domain');
+let addedNewListener = false;
+const experimentalREPLAwait = getOptionValue('--experimental-repl-await');
+let processTopLevelAwait;
+
+
+
+function creat_options(prompt,stream,eval_,useGlobal,ignoreUndefined,replMode) {
+    let options;
+    if (prompt !== null && typeof prompt === 'object') {
+      // An options object was given.
+      options = { ...prompt };
+      stream = options.stream || options.socket;
+      eval_ = options.eval;
+      useGlobal = options.useGlobal;
+      ignoreUndefined = options.ignoreUndefined;
+      prompt = options.prompt;
+      replMode = options.replMode;
+    } else {
+      options = {};
+    }
+    return([
+        options,
+        prompt,
+        stream,
+        eval_,
+        useGlobal,
+        ignoreUndefined,
+        replMode
+    ])
+}
+
+function set_stream(options,stream) {
+    if (!options.input && !options.output) {
+      // Legacy API, passing a 'stream'/'socket' option.
+      if (!stream) {
+        // Use stdin and stdout as the default streams if none were given.
+        stream = process;
+      }
+      // We're given a duplex readable/writable Stream, like a `net.Socket`
+      // or a custom object with 2 streams, or the `process` object.
+      options.input = stream.stdin || stream;
+      options.output = stream.stdout || stream;
+    }
+    return(stream)
+}
+
+
+function set_terminal(options) {
+    if (options.terminal === undefined) {
+      options.terminal = options.output.isTTY;
+    }
+    options.terminal = !!options.terminal;
+    return(options.terminal)
+}
+
+function set_use_colors(options){
+    if (options.terminal && options.useColors === undefined) {
+      // If possible, check if stdout supports colors or not.
+      if (options.output.hasColors) {
+        options.useColors = options.output.hasColors();
+      } else if (process.env.NODE_DISABLE_COLORS === undefined) {
+        options.useColors = true;
+      }
+    }
+}
+
+function set_preview(options,eval_) {
+      // TODO(devsnek): Add a test case for custom eval functions.
+    const preview = options.terminal &&
+        (options.preview !== undefined ? !!options.preview : !eval_);
+    return(preview)
+}
+
+function defineInputStream(that) {
+  ObjectDefineProperty(that, 'inputStream', {
+    get: pendingDeprecation ?
+      deprecate(() => that.input,
+                'repl.inputStream and repl.outputStream are deprecated. ' +
+                  'Use repl.input and repl.output instead',
+                'DEP0141') :
+      () => that.input,
+    set: pendingDeprecation ?
+      deprecate((val) => that.input = val,
+                'repl.inputStream and repl.outputStream are deprecated. ' +
+                  'Use repl.input and repl.output instead',
+                'DEP0141') :
+      (val) => that.input = val,
+    enumerable: false,
+    configurable: true
+  });
+}
+
+
+function defineOutputStream(that) {
+    ObjectDefineProperty(that, 'outputStream', {
+      get: pendingDeprecation ?
+        deprecate(() => that.output,
+                  'repl.inputStream and repl.outputStream are deprecated. ' +
+                    'Use repl.input and repl.output instead',
+                  'DEP0141') :
+        () => that.output,
+      set: pendingDeprecation ?
+        deprecate((val) => that.output = val,
+                  'repl.inputStream and repl.outputStream are deprecated. ' +
+                    'Use repl.input and repl.output instead',
+                  'DEP0141') :
+        (val) => that.output = val,
+      enumerable: false,
+      configurable: true
+    });
+}
+
+function set_property(that,options,useGlobal,ignoreUndefined,replMode,m){
+  that.useColors = !!options.useColors;
+  that._domain = options.domain || domain.create();
+  that.useGlobal = !!useGlobal;
+  that.ignoreUndefined = !!ignoreUndefined;
+  that.replMode = replMode || m.exports.REPL_MODE_SLOPPY;
+  that.underscoreAssigned = false;
+  that.last = undefined;
+  that.underscoreErrAssigned = false;
+  that.lastError = undefined;
+  that.breakEvalOnSigint = !!options.breakEvalOnSigint;
+  that.editorMode = false;
+  // Context id for use with the inspector protocol.
+  that[kContextId] = undefined;
+}
+
+
+function checkStandaloneREPLandAddNewListener(that,options,m) {
+    if (options[kStandaloneREPL]) {
+      // It is possible to introspect the running REPL accessing this variable
+      // from inside the REPL. This is useful for anyone working on the REPL.
+      m.exports.repl = that;
+    } else if (!addedNewListener) {
+      // Add this listener only once and use a WeakSet that contains the REPLs
+      // domains. Otherwise we'd have to add a single listener to each REPL
+      // instance and that could trigger the `MaxListenersExceededWarning`.
+      process.prependListener('newListener', (event, listener) => {
+        if (event === 'uncaughtException' &&
+            process.domain &&
+            listener.name !== 'domainUncaughtExceptionClear' &&
+            domainSet.has(process.domain)) {
+          // Throw an error so that the event will not be added and the current
+          // domain takes over. That way the user is notified about the error
+          // and the current code evaluation is stopped, just as any other code
+          // that contains an error.
+          throw new ERR_INVALID_REPL_INPUT(
+            'Listeners for `uncaughtException` cannot be used in the REPL');
+        }
+      });
+      addedNewListener = true;
+    }
+    domainSet.add(that._domain);
+    return(addedNewListener)
+}
+
+
+function checkBreakEvalOnSigint(that,eval_) {
+  if (that.breakEvalOnSigint && eval_) {
+    // Allowing that would not reflect user expectations.
+    // breakEvalOnSigint affects only the behavior of the default eval().
+    throw new ERR_INVALID_REPL_EVAL_CONFIG();
+  }
+}
+
+
+function _unpause(that,paused,pausedBuffer) {
+    if (!paused) {return(paused)}
+    paused = false;
+    let entry;
+    const tmpCompletionEnabled = that.isCompletionEnabled;
+    while (entry = ArrayPrototypeShift(pausedBuffer)) {
+        const [type, payload, isCompletionEnabled] = entry;
+        switch (type) {
+            case 'key': {
+                const [d, key] = payload;
+                that.isCompletionEnabled = isCompletionEnabled;
+                that._ttyWrite(d, key);
+                break;
+            }
+            case 'close':
+                that.emit('exit');
+                 break;
+        }
+        if (paused) { break; }
+    }
+    that.isCompletionEnabled = tmpCompletionEnabled;
+    return(paused)
+}
+
+
+function try_and_wrap_cmd(code,wrappedCmd) {
+    // It's confusing for `{ a : 1 }` to be interpreted as a block
+    // statement rather than an object literal.  So, we first try
+    // to wrap it in parentheses, so that it will be interpreted as
+    // an expression.  Note that if the above condition changes,
+    // lib/internal/repl/utils.js needs to be changed to match.
+    if (RegExpPrototypeTest(/^\s*{/, code) &&
+        !RegExpPrototypeTest(/;\s*$/, code)) {
+      code = `(${StringPrototypeTrim(code)})\n`;
+      wrappedCmd = true;
+    }
+    return([code,wrappedCmd])
+}
+
+function wrapExperimentalREPLAwait(code,wrappedCmd,awaitPromise) {
+    if (experimentalREPLAwait && StringPrototypeIncludes(code, 'await')) {
+      if (processTopLevelAwait === undefined) {
+        ({ processTopLevelAwait } = require('internal/repl/await'));
+      }
+      const potentialWrappedCode = processTopLevelAwait(code);
+      if (potentialWrappedCode !== null) {
+        code = potentialWrappedCode;
+        wrappedCmd = true;
+        awaitPromise = true;
+      }
+    }
+    return([
+        code,
+        wrappedCmd,
+        awaitPromise
+    ])
+}
+
+function getParentURL() {
+    let parentURL;
+    try {
+      const { pathToFileURL } = require('url');
+      // Adding `/repl` prevents dynamic imports from loading relative
+      // to the parent of `process.cwd()`.
+      parentURL = pathToFileURL(path.join(process.cwd(), 'repl')).href;
+    } catch {
+    }
+    return(parentURL)
+}
+
+function prependUseStrict(that,m,code) {
+    if (that.replMode === m.exports.REPL_MODE_STRICT &&
+        !RegExpPrototypeTest(/^\s*$/, code)) {
+      // "void 0" keeps the repl from returning "use strict" as the result
+      // value for statements and declarations that don't return a value.
+      code = `'use strict'; void 0;\n${code}`;
+    }
+    return(code)
+}
+
+function createScriptForWrappedCode(that,m,code,script,file) {
+    let parentURL = getParentURL();
+    code = prependUseStrict(that,m,code);
+    script = vm.createScript(code, {
+        filename: file,
+        displayErrors: true,
+        importModuleDynamically: async (specifier) => {
+          return asyncESM.ESMLoader.import(specifier, parentURL);
+        }
+    });
+    return([code,script])
+}
+function creatRecoverableCls() {
+    function Recoverable(err) {this.err = err;}
+    ObjectSetPrototypeOf(Recoverable.prototype, SyntaxErrorPrototype);
+    ObjectSetPrototypeOf(Recoverable, SyntaxError);
+    return(Recoverable)
+}
+
+let Recoverable = creatRecoverableCls();
+
+function creatScriptForCode(
+    that,m,code,input,
+    file,wrappedCmd,err,
+    awaitPromise,script,debug
+) {
+    let wrappedErr;
+    while (true) {
+        try {
+            [code,script] = createScriptForWrappedCode(that,m,code,script,file);
+        } catch (e) {
+            debug('parse error %j', code, e);
+            if (wrappedCmd) {
+                // Unwrap and try again
+                wrappedCmd = false;
+                awaitPromise = false;
+                code = input;
+                wrappedErr = e;
+                continue;
+            }
+            // Preserve original error for wrapped command
+            const error = wrappedErr || e;
+            if (isRecoverableError(error, code))
+                err = new Recoverable(error);
+            else
+                err = error;
+        }
+        break;
+    }
+    return([script,awaitPromise,err])
+}
+
+
+function creatSavedRegExMatches(){
+    const savedRegExMatches = ['', '', '', '', '', '', '', '', '', ''];
+    const sep = '\u0000\u0000\u0000';
+    const regExMatcher = new RegExp(
+        `^${sep}(.*)${sep}(.*)${sep}(.*)${sep}(.*)` +
+        `${sep}(.*)${sep}(.*)${sep}(.*)${sep}(.*)` +
+        `${sep}(.*)$`
+    );
+    RegExpPrototypeTest(
+        regExMatcher,
+        ArrayPrototypeJoin(savedRegExMatches, sep)
+    );
+    return(savedRegExMatches)
+}
+
+function finishExecution(err, result,cb) {
+    let finished = false;
+    let savedRegExMatches = creatSavedRegExMatches();
+    if (finished) {return(finished)}
+    finished = true;
+    // After executing the current expression, store the values of RegExp
+    // predefined properties back in `savedRegExMatches`
+    for (let idx = 1; idx < savedRegExMatches.length; idx += 1) {
+        savedRegExMatches[idx] = RegExp[`$${idx}`];
+    }
+    cb(err, result);
+    return(finished)
+}
+
+
+function getPreviouslyInRawMode(that) {
+    // Unset raw mode during evaluation so that Ctrl+C raises a signal.
+    let previouslyInRawMode;
+    if (that.breakEvalOnSigint) {
+      // Start the SIGINT watchdog before entering raw mode so that a very
+      // quick Ctrl+C doesn't lead to aborting the process completely.
+      if (!startSigintWatchdog())
+        throw new ERR_CANNOT_WATCH_SIGINT();
+      previouslyInRawMode = that._setRawMode(false);
+    }
+    return(previouslyInRawMode)
+}
+
+function _runScriptInContext(that,script,context) {
+    const scriptOptions = {
+      displayErrors: false,
+      breakOnSigint: that.breakEvalOnSigint
+    };
+    if (that.useGlobal) {
+      result = script.runInThisContext(scriptOptions);
+    } else {
+      result = script.runInContext(context, scriptOptions);
+    }
+    return(result)
+}
+
+function _resetTerminalModeToPrevious(that) {
+    let previouslyInRawMode = getPreviouslyInRawMode(that);
+    if (that.breakEvalOnSigint) {
+      // Reset terminal mode to its previous value.
+      that._setRawMode(previouslyInRawMode);
+      // Returns true if there were pending SIGINTs *after* the script
+      // has terminated without being interrupted itthat.
+      if (stopSigintWatchdog()) {
+        that.emit('SIGINT');
+      }
+    }
+}
+
+function _sendErrorToDomain(e,debug) {
+    err = e;
+    if (process.domain) {
+      debug('not recoverable, send to domain');
+      process.domain.emit('error', err);
+      process.domain.exit();
+    }
+    return(err)
+}
+
+
+////
+function defineBuiltinLibs(m) {
+    ObjectDefineProperty(m.exports, 'builtinModules', {
+        get: () => _builtinLibs,
+        set: (val) => _builtinLibs = val,
+        enumerable: true,
+        configurable: true
+    });
+
+    ObjectDefineProperty(m.exports, '_builtinLibs', {
+      get: pendingDeprecation ? deprecate(
+        () => _builtinLibs,
+        'repl._builtinLibs is deprecated. Check module.builtinModules instead',
+        'DEP0142'
+      ) : () => _builtinLibs,
+      set: pendingDeprecation ? deprecate(
+        (val) => _builtinLibs = val,
+        'repl._builtinLibs is deprecated. Check module.builtinModules instead',
+        'DEP0142'
+      ) : (val) => _builtinLibs = val,
+      enumerable: false,
+      configurable: true
+    });
+}
+
+
+
+
+
+module.exports = {
+    ////
+    kContextId,
+    kStandaloneREPL,
+    ////
+    addedNewListener,
+    domainSet,
+    domain,
+    CJSModule,
+    _builtinLibs,
+    experimentalREPLAwait,
+    processTopLevelAwait,
+    ////
+    creat_options,
+    set_stream,
+    set_terminal,
+    set_use_colors,
+    set_preview,
+    defineInputStream,
+    defineOutputStream,
+    set_property,
+    checkBreakEvalOnSigint,
+    checkStandaloneREPLandAddNewListener,
+    _unpause,
+    try_and_wrap_cmd,
+    wrapExperimentalREPLAwait,
+    getParentURL,
+    prependUseStrict,
+    createScriptForWrappedCode,
+    creatRecoverableCls,
+    Recoverable,
+    creatScriptForCode,
+    creatSavedRegExMatches,
+    finishExecution,
+    getPreviouslyInRawMode,
+    _runScriptInContext,
+    _resetTerminalModeToPrevious,
+    _sendErrorToDomain,
+    ////
+    defineBuiltinLibs,
+    ////
+}

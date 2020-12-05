@@ -72,345 +72,7 @@ const { inspect } = require('internal/util/inspect');
 const vm = require('vm');
 const path = require('path');
 const fs = require('fs');
-
-
-
-////readline_interface
-////completer
 const { Interface } = require('readline');
-
-function complete_repl_commands(that,completionGroups,completeOn,line,filter) {
-    ArrayPrototypePush(completionGroups, ObjectKeys(that.commands));
-    completeOn = line.match(/^\s*\.(\w*)$/)[1];
-    if (completeOn.length) {
-      filter = completeOn;
-    }
-    return([filter,completeOn])
-}
-
-function get_complete_require_paths(that,line,completeOn,filter,group) {
-    // require('...<Tab>')
-    const extensions = ObjectKeys(that.context.require.extensions);
-    const indexes = ArrayPrototypeMap(extensions,
-        (extension) => `index${extension}`);
-    ArrayPrototypePush(indexes, 'package.json', 'index');
-    const versionedFileNamesRe = /-\d+\.\d+/;
-    const match = StringPrototypeMatch(line, requireRE);
-    completeOn = match[1];
-    const subdir = match[2] || '';
-    filter = completeOn;
-    group = [];
-    let paths = [];
-    if (completeOn === '.') {
-        group = ['./', '../'];
-    } else if (completeOn === '..') {
-        group = ['../'];
-    } else if (RegExpPrototypeTest(/^\.\.?\//, completeOn)) {
-        paths = [process.cwd()];
-    } else {
-        paths = ArrayPrototypeConcat(module.paths, CJSModule.globalPaths);
-    }
-    return([completeOn ,filter,group,paths,indexes,subdir])
-}
-
-function gracefulReaddir(...args) {
-  try {
-    return fs.readdirSync(...args);
-  } catch {}
-}
-
-function  fill_complete_require_group_with_paths(group,indexes,paths) {
-    const versionedFileNamesRe = /-\d+\.\d+/;
-    for (let dir of paths) {
-        dir = path.resolve(dir, subdir);
-        const dirents = gracefulReaddir(dir, { withFileTypes: true }) || [];
-        for (const dirent of dirents) {
-            if (RegExpPrototypeTest(versionedFileNamesRe, dirent.name) || dirent.name === '.npm') {
-                continue;
-            }
-            const extension = StringPrototypeSlice(dirent.name, 0, -extension.length);
-            const base = dirent.name.slice(0, -extension.length);
-            if (!dirent.isDirectory()) {
-                if (StringPrototypeIncludes(extensions, extension) && (!subdir || base !== 'index'))  {
-                    ArrayPrototypePush(group, `${subdir}${base}`);
-                }
-                continue;
-            }
-            ArrayPrototypePush(group, `${subdir}${dirent.name}/`);
-            const absolute = path.resolve(dir, dirent.name);
-            const subfiles = gracefulReaddir(absolute) || [];
-            for (const subfile of subfiles) {
-                if (ArrayPrototypeIncludes(indexes, subfile)) {
-                    ArrayPrototypePush(group, `${subdir}${dirent.name}`);
-                    break;
-                }
-            }
-        }
-    }
-}
-
-function complete_require(that,line,completeOn,filter,group) {
-    let paths;
-    let indexes;
-    [completeOn ,filter,group,paths,indexes] = get_complete_require_paths(that,m,line,completeOn,filter,group);
-    fill_complete_require_group_with_paths(group,indexes,paths);
-    if (group.length) {ArrayPrototypePush(completionGroups, group);}
-    if (!subdir) {ArrayPrototypePush(completionGroups, _builtinLibs);}
-    return([filter,completeOn,group])
-}
-
-function completeFSFunctions(line) {
-  let baseName = '';
-  let filePath = StringPrototypeMatch(line, fsAutoCompleteRE)[1];
-  let fileList = gracefulReaddir(filePath, { withFileTypes: true });
-  if (!fileList) {
-    baseName = path.basename(filePath);
-    filePath = path.dirname(filePath);
-    fileList = gracefulReaddir(filePath, { withFileTypes: true }) || [];
-  }
-  const completions = ArrayPrototypeMap(
-    ArrayPrototypeFilter(
-      fileList,
-      (dirent) => StringPrototypeStartsWith(dirent.name, baseName)
-    ),
-    (d) => d.name
-  );
-  return [[completions], baseName];
-}
-
-function filter_completion_groups(completionGroups,filter){
-    if (completionGroups.length && filter) {
-      const newCompletionGroups = [];
-      for (const group of completionGroups) {
-        const filteredGroup = ArrayPrototypeFilter(
-            group,
-            (str) => StringPrototypeStartsWith(str, filter)
-        )
-        if (filteredGroup.length) {
-            ArrayPrototypePush(newCompletionGroups, filteredGroup);
-        }
-      }
-      completionGroups = newCompletionGroups;
-    }
-    return(completionGroups)
-}
-
-
-function uniq_completions_across_all_groups(completionGroups) {
-    const completions = [];
-    // Unique completions across all groups.
-    const uniqueSet = new Set(['']);
-    // Completion group 0 is the "closest" (least far up the inheritance
-    // chain) so we put its completions last: to be closest in the REPL.
-    for (const group of completionGroups) {
-      ArrayPrototypeSort(group, (a, b) => (b > a ? 1 : -1));
-      const setSize = uniqueSet.size;
-      for (const entry of group) {
-        if (!uniqueSet.has(entry)) {
-          ArrayPrototypeUnshift(completions, entry);
-          uniqueSet.add(entry);
-        }
-      }
-      // Add a separator between groups.
-      if (uniqueSet.size !== setSize) {
-          ArrayPrototypeUnshift(completions, '');
-      }
-    }
-    return(completions)
-}
-
-function completionGroupsLoaded(completionGroups,filter,callback,completeOn) {
-    // Will be called when all completionGroups are in place
-    // Useful for async autocompletion
-    completionGroups = filter_completion_groups(completionGroups,filter);
-    const completions  = uniq_completions_across_all_groups(completionGroups);
-    // Remove obsolete group entry, if present.
-    if (completions[0] === '') { ArrayPrototypeShift(completions);}
-    callback(null, [completions, completeOn]);
-}
-
-function get_complete_simple_expr(line,completionGroups,filter,callback,completeOn) {
-    const [match] = RegExpPrototypeExec(simpleExpressionRE, line) || [''];
-    if (line.length !== 0 && !match) {
-        completionGroupsLoaded(completionGroups,filter,callback,completeOn);
-        return([true,'',completeOn,filter])
-    }
-    let expr = '';
-    completeOn = match;
-    if (StringPrototypeEndsWith(line, '.')) {
-      expr = StringPrototypeSlice(match, 0, -1);
-    } else if (line.length !== 0) {
-      const bits = StringPrototypeSplit(match, '.');
-      filter = ArrayPrototypePop(bits);
-      expr = ArrayPrototypeJoin(bits, '.');
-    }
-    return([false,expr,completeOn,filter])
-}
-
-
-function filteredOwnPropertyNames(obj) {
-    if (!obj) return [];
-    const filter = ALL_PROPERTIES | SKIP_SYMBOLS;
-    return ArrayPrototypeFilter(getOwnNonIndexProperties(obj, filter),isIdentifier);
-}
-
-
-function addCommonWords(completionGroups) {
-  // Only words which do not yet exist as global property should be added to
-  // this list.
-  ArrayPrototypePush(completionGroups, [
-    'async', 'await', 'break', 'case', 'catch', 'const', 'continue',
-    'debugger', 'default', 'delete', 'do', 'else', 'export', 'false',
-    'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let',
-    'new', 'null', 'return', 'switch', 'this', 'throw', 'true', 'try',
-    'typeof', 'var', 'void', 'while', 'with', 'yield'
-  ]);
-}
-
-
-function resolve_empty_expr_and_get_completions(that,expr,completionGroups,filter,callback,completeOn) {
-    // Get global vars synchronously
-    ArrayPrototypePush(completionGroups,getGlobalLexicalScopeNames(that[kContextId]));
-    let contextProto = that.context;
-    while (contextProto = ObjectGetPrototypeOf(contextProto)) {
-        ArrayPrototypePush(completionGroups,filteredOwnPropertyNames(contextProto));
-    }
-    const contextOwnNames = filteredOwnPropertyNames(that.context);
-    if (!that.useGlobal) {
-      // When the context is not `global`, builtins are not own
-      // properties of it.
-      ArrayPrototypePush(contextOwnNames, ...globalBuiltins);
-    }
-    ArrayPrototypePush(completionGroups, contextOwnNames);
-    if (filter !== '') addCommonWords(completionGroups);
-    completionGroupsLoaded(completionGroups,filter,callback,completeOn);
-}
-
-
-function resolve_expr_and_get_completions(that,expr,filter,callback,completeOn) {
-    let chaining = '.';
-    if (StringPrototypeEndsWith(expr, '?')) {
-        expr = StringPrototypeSlice(expr, 0, -1);
-        chaining = '?.';
-    }
-    const memberGroups = [];
-    const evalExpr = `try { ${expr} } catch {}`;
-    that.eval(
-        evalExpr,
-        that.context,
-        getREPLResourceName(),
-        (e, obj) => {
-            try {
-                let p;
-                if ((typeof obj === 'object' && obj !== null) || typeof obj === 'function') {
-                    memberGroups.push(filteredOwnPropertyNames(obj));
-                    p = ObjectGetPrototypeOf(obj);
-                } else {
-                    p = obj.constructor ? obj.constructor.prototype : null;
-                }
-                // Circular refs possible? Let's guard against that.
-                let sentinel = 5;
-                while (p !== null && sentinel-- !== 0) {
-                    memberGroups.push(filteredOwnPropertyNames(p));
-                    p = ObjectGetPrototypeOf(p);
-                }
-            } catch {
-            }
-            if (memberGroups.length) {
-                expr += chaining;
-                for (const group of memberGroups) {
-                    ArrayPrototypePush(
-                        completionGroups,
-                        ArrayPrototypeMap(group,(member) => `${expr}${member}`)
-                    );
-                }
-                if (filter) {
-                    filter = `${expr}${filter}`;
-                }
-            }
-            completionGroupsLoaded(completionGroups,filter,callback,completeOn);
-        }
-    )
-    return(filter)
-}
-
-
-function _complete(that,line, callback) {
-    // List of completion lists, one for each inheritance "level"
-    let completionGroups = [];
-    let completeOn, group;
-    // Ignore right whitespace. It could change the outcome.
-    line = StringPrototypeTrimLeft(line);
-    // REPL commands (e.g. ".break").
-    let filter = '';
-    if (RegExpPrototypeTest(/^\s*\.(\w*)$/, line)) {
-        [
-            filter,
-            completeOn
-        ] = complete_repl_commands(that,completionGroups,completeOn,line,filter)       
-    } else if (RegExpPrototypeTest(requireRE, line)) {
-        [
-            filter,
-            completeOn,
-            group
-        ] = complete_require(that,line,completeOn,filter,group);
-
-    } else if (RegExpPrototypeTest(fsAutoCompleteRE, line)) {
-        [completionGroups, completeOn] = completeFSFunctions(line);
-    } else if (
-        line.length === 0 ||
-        RegExpPrototypeTest(/\w|\.|\$/, line[line.length - 1])
-    ) {
-        
-        let rtrn_flag = false;
-        let expr;
-        [rtrn_flag,expr,completeOn,filter] = get_complete_simple_expr(line,completionGroups,filter,callback,completeOn);
-        if(rtrn_flag) {return}
-        // Resolve expr and get its completions.
-        if (!expr) {
-            resolve_empty_expr_and_get_completions(that,expr,completionGroups,filter,callback,completeOn);
-            return;
-        } else {
-            resolve_expr_and_get_completions(that,expr,filter,callback,completeOn);
-            return;
-        }
-    }
-    return completionGroupsLoaded(completionGroups,filter,callback,completeOn);
-}
-
-function _completer(that,text, cb) {
-    function complete(line,callback) {_complete(that,line,callback)}
-    ReflectApply(
-        complete, 
-        that,
-        [text, that.editorMode ? that.completeOnEditorMode(cb) : cb]
-    );
-}
-
-function apply_readline_interface(that,options,prompt) { 
-    function completer(text, cb) {_completer(that,text, cb)}
-    ReflectApply(
-        Interface, 
-        that, 
-        [{
-            input: options.input,
-            output: options.output,
-            completer: options.completer || completer,
-            terminal: options.terminal,
-            historySize: options.historySize,
-            prompt
-        }]
-    );
-}
-
-REPLServer.prototype.complete = function() {
-    ReflectApply(this.completer, this, arguments);
-};
-
-
-
-////
-
 const {
   commonPrefix
 } = require('internal/readline/utils');
@@ -983,8 +645,20 @@ function REPLServer(prompt,
   });
 
   self.clearBufferedCommand();
-   
-  apply_readline_interface(self,options,prompt);
+
+  function completer(text, cb) {
+    ReflectApply(complete, self,
+                 [text, self.editorMode ? self.completeOnEditorMode(cb) : cb]);
+  }
+
+  ReflectApply(Interface, this, [{
+    input: options.input,
+    output: options.output,
+    completer: options.completer || completer,
+    terminal: options.terminal,
+    historySize: options.historySize,
+    prompt
+  }]);
 
   self.resetContext();
 
@@ -1411,6 +1085,12 @@ function isIdentifier(str) {
   return true;
 }
 
+function filteredOwnPropertyNames(obj) {
+  if (!obj) return [];
+  const filter = ALL_PROPERTIES | SKIP_SYMBOLS;
+  return ArrayPrototypeFilter(getOwnNonIndexProperties(obj, filter),
+                              isIdentifier);
+}
 
 function getGlobalLexicalScopeNames(contextId) {
   return sendInspectorCommand((session) => {
@@ -1424,9 +1104,272 @@ function getGlobalLexicalScopeNames(contextId) {
   }, () => []);
 }
 
+REPLServer.prototype.complete = function() {
+  ReflectApply(this.completer, this, arguments);
+};
 
+function gracefulReaddir(...args) {
+  try {
+    return fs.readdirSync(...args);
+  } catch {}
+}
 
+function completeFSFunctions(line) {
+  let baseName = '';
+  let filePath = StringPrototypeMatch(line, fsAutoCompleteRE)[1];
+  let fileList = gracefulReaddir(filePath, { withFileTypes: true });
 
+  if (!fileList) {
+    baseName = path.basename(filePath);
+    filePath = path.dirname(filePath);
+    fileList = gracefulReaddir(filePath, { withFileTypes: true }) || [];
+  }
+
+  const completions = ArrayPrototypeMap(
+    ArrayPrototypeFilter(
+      fileList,
+      (dirent) => StringPrototypeStartsWith(dirent.name, baseName)
+    ),
+    (d) => d.name
+  );
+
+  return [[completions], baseName];
+}
+
+// Provide a list of completions for the given leading text. This is
+// given to the readline interface for handling tab completion.
+//
+// Example:
+//  complete('let foo = util.')
+//    -> [['util.print', 'util.debug', 'util.log', 'util.inspect'],
+//        'util.' ]
+//
+// Warning: This eval's code like "foo.bar.baz", so it will run property
+// getter code.
+function complete(line, callback) {
+  // List of completion lists, one for each inheritance "level"
+  let completionGroups = [];
+  let completeOn, group;
+
+  // Ignore right whitespace. It could change the outcome.
+  line = StringPrototypeTrimLeft(line);
+
+  // REPL commands (e.g. ".break").
+  let filter = '';
+  if (RegExpPrototypeTest(/^\s*\.(\w*)$/, line)) {
+    ArrayPrototypePush(completionGroups, ObjectKeys(this.commands));
+    completeOn = StringPrototypeMatch(line, /^\s*\.(\w*)$/)[1];
+    if (completeOn.length) {
+      filter = completeOn;
+    }
+  } else if (RegExpPrototypeTest(requireRE, line)) {
+    // require('...<Tab>')
+    const extensions = ObjectKeys(this.context.require.extensions);
+    const indexes = ArrayPrototypeMap(extensions,
+                                      (extension) => `index${extension}`);
+    ArrayPrototypePush(indexes, 'package.json', 'index');
+    const versionedFileNamesRe = /-\d+\.\d+/;
+
+    const match = StringPrototypeMatch(line, requireRE);
+    completeOn = match[1];
+    const subdir = match[2] || '';
+    filter = completeOn;
+    group = [];
+    let paths = [];
+
+    if (completeOn === '.') {
+      group = ['./', '../'];
+    } else if (completeOn === '..') {
+      group = ['../'];
+    } else if (RegExpPrototypeTest(/^\.\.?\//, completeOn)) {
+      paths = [process.cwd()];
+    } else {
+      paths = ArrayPrototypeConcat(module.paths, CJSModule.globalPaths);
+    }
+
+    for (let dir of paths) {
+      dir = path.resolve(dir, subdir);
+      const dirents = gracefulReaddir(dir, { withFileTypes: true }) || [];
+      for (const dirent of dirents) {
+        if (RegExpPrototypeTest(versionedFileNamesRe, dirent.name) ||
+            dirent.name === '.npm') {
+          // Exclude versioned names that 'npm' installs.
+          continue;
+        }
+        const extension = path.extname(dirent.name);
+        const base = StringPrototypeSlice(dirent.name, 0, -extension.length);
+        if (!dirent.isDirectory()) {
+          if (StringPrototypeIncludes(extensions, extension) &&
+              (!subdir || base !== 'index')) {
+            ArrayPrototypePush(group, `${subdir}${base}`);
+          }
+          continue;
+        }
+        ArrayPrototypePush(group, `${subdir}${dirent.name}/`);
+        const absolute = path.resolve(dir, dirent.name);
+        const subfiles = gracefulReaddir(absolute) || [];
+        for (const subfile of subfiles) {
+          if (ArrayPrototypeIncludes(indexes, subfile)) {
+            ArrayPrototypePush(group, `${subdir}${dirent.name}`);
+            break;
+          }
+        }
+      }
+    }
+    if (group.length) {
+      ArrayPrototypePush(completionGroups, group);
+    }
+
+    if (!subdir) {
+      ArrayPrototypePush(completionGroups, _builtinLibs);
+    }
+  } else if (RegExpPrototypeTest(fsAutoCompleteRE, line)) {
+    [completionGroups, completeOn] = completeFSFunctions(line);
+  // Handle variable member lookup.
+  // We support simple chained expressions like the following (no function
+  // calls, etc.). That is for simplicity and also because we *eval* that
+  // leading expression so for safety (see WARNING above) don't want to
+  // eval function calls.
+  //
+  //   foo.bar<|>     # completions for 'foo' with filter 'bar'
+  //   spam.eggs.<|>  # completions for 'spam.eggs' with filter ''
+  //   foo<|>         # all scope vars with filter 'foo'
+  //   foo.<|>        # completions for 'foo' with filter ''
+  } else if (line.length === 0 ||
+             RegExpPrototypeTest(/\w|\.|\$/, line[line.length - 1])) {
+    const [match] = RegExpPrototypeExec(simpleExpressionRE, line) || [''];
+    if (line.length !== 0 && !match) {
+      completionGroupsLoaded();
+      return;
+    }
+    let expr = '';
+    completeOn = match;
+    if (StringPrototypeEndsWith(line, '.')) {
+      expr = StringPrototypeSlice(match, 0, -1);
+    } else if (line.length !== 0) {
+      const bits = StringPrototypeSplit(match, '.');
+      filter = ArrayPrototypePop(bits);
+      expr = ArrayPrototypeJoin(bits, '.');
+    }
+
+    // Resolve expr and get its completions.
+    if (!expr) {
+      // Get global vars synchronously
+      ArrayPrototypePush(completionGroups,
+                         getGlobalLexicalScopeNames(this[kContextId]));
+      let contextProto = this.context;
+      while (contextProto = ObjectGetPrototypeOf(contextProto)) {
+        ArrayPrototypePush(completionGroups,
+                           filteredOwnPropertyNames(contextProto));
+      }
+      const contextOwnNames = filteredOwnPropertyNames(this.context);
+      if (!this.useGlobal) {
+        // When the context is not `global`, builtins are not own
+        // properties of it.
+        ArrayPrototypePush(contextOwnNames, ...globalBuiltins);
+      }
+      ArrayPrototypePush(completionGroups, contextOwnNames);
+      if (filter !== '') addCommonWords(completionGroups);
+      completionGroupsLoaded();
+      return;
+    }
+
+    let chaining = '.';
+    if (StringPrototypeEndsWith(expr, '?')) {
+      expr = StringPrototypeSlice(expr, 0, -1);
+      chaining = '?.';
+    }
+
+    const memberGroups = [];
+    const evalExpr = `try { ${expr} } catch {}`;
+    this.eval(evalExpr, this.context, getREPLResourceName(), (e, obj) => {
+      try {
+        let p;
+        if ((typeof obj === 'object' && obj !== null) ||
+            typeof obj === 'function') {
+          memberGroups.push(filteredOwnPropertyNames(obj));
+          p = ObjectGetPrototypeOf(obj);
+        } else {
+          p = obj.constructor ? obj.constructor.prototype : null;
+        }
+        // Circular refs possible? Let's guard against that.
+        let sentinel = 5;
+        while (p !== null && sentinel-- !== 0) {
+          memberGroups.push(filteredOwnPropertyNames(p));
+          p = ObjectGetPrototypeOf(p);
+        }
+      } catch {
+        // Maybe a Proxy object without `getOwnPropertyNames` trap.
+        // We simply ignore it here, as we don't want to break the
+        // autocompletion. Fixes the bug
+        // https://github.com/nodejs/node/issues/2119
+      }
+
+      if (memberGroups.length) {
+        expr += chaining;
+        for (const group of memberGroups) {
+          ArrayPrototypePush(completionGroups,
+                             ArrayPrototypeMap(group,
+                                               (member) => `${expr}${member}`));
+        }
+        if (filter) {
+          filter = `${expr}${filter}`;
+        }
+      }
+
+      completionGroupsLoaded();
+    });
+    return;
+  }
+
+  return completionGroupsLoaded();
+
+  // Will be called when all completionGroups are in place
+  // Useful for async autocompletion
+  function completionGroupsLoaded() {
+    // Filter, sort (within each group), uniq and merge the completion groups.
+    if (completionGroups.length && filter) {
+      const newCompletionGroups = [];
+      for (const group of completionGroups) {
+        const filteredGroup = ArrayPrototypeFilter(
+          group,
+          (str) => StringPrototypeStartsWith(str, filter)
+        );
+        if (filteredGroup.length) {
+          ArrayPrototypePush(newCompletionGroups, filteredGroup);
+        }
+      }
+      completionGroups = newCompletionGroups;
+    }
+
+    const completions = [];
+    // Unique completions across all groups.
+    const uniqueSet = new SafeSet(['']);
+    // Completion group 0 is the "closest" (least far up the inheritance
+    // chain) so we put its completions last: to be closest in the REPL.
+    for (const group of completionGroups) {
+      ArrayPrototypeSort(group, (a, b) => (b > a ? 1 : -1));
+      const setSize = uniqueSet.size;
+      for (const entry of group) {
+        if (!uniqueSet.has(entry)) {
+          ArrayPrototypeUnshift(completions, entry);
+          uniqueSet.add(entry);
+        }
+      }
+      // Add a separator between groups.
+      if (uniqueSet.size !== setSize) {
+        ArrayPrototypeUnshift(completions, '');
+      }
+    }
+
+    // Remove obsolete group entry, if present.
+    if (completions[0] === '') {
+      ArrayPrototypeShift(completions);
+    }
+
+    callback(null, [completions, completeOn]);
+  }
+}
 
 REPLServer.prototype.completeOnEditorMode = (callback) => (err, results) => {
   if (err) return callback(err);
@@ -1518,6 +1461,17 @@ function _memory(cmd) {
   }
 }
 
+function addCommonWords(completionGroups) {
+  // Only words which do not yet exist as global property should be added to
+  // this list.
+  ArrayPrototypePush(completionGroups, [
+    'async', 'await', 'break', 'case', 'catch', 'const', 'continue',
+    'debugger', 'default', 'delete', 'do', 'else', 'export', 'false',
+    'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let',
+    'new', 'null', 'return', 'switch', 'this', 'throw', 'true', 'try',
+    'typeof', 'var', 'void', 'while', 'with', 'yield'
+  ]);
+}
 
 function _turnOnEditorMode(repl) {
   repl.editorMode = true;
@@ -1667,3 +1621,4 @@ ObjectDefineProperty(module.exports, '_builtinLibs', {
   enumerable: false,
   configurable: true
 });
+

@@ -1,0 +1,870 @@
+const {
+    ObjectGetPrototypeOf,
+    ObjectDefineProperty,
+    WeakSet,
+    SyntaxErrorPrototype,
+    SyntaxError,
+    ObjectSetPrototypeOf,
+    ObjectKeys,
+} = primordials;
+
+
+const {
+  getOwnNonIndexProperties,
+  propertyFilter: {
+    ALL_PROPERTIES,
+    SKIP_SYMBOLS
+  }
+} = internalBinding('util');
+
+
+const path = require('path');
+const fs = require('fs');
+
+
+
+
+
+
+const { getOptionValue } = require('internal/options');
+
+const {
+  codes: {
+    ERR_INVALID_REPL_INPUT,
+    ERR_INVALID_ARG_TYPE,  
+  },
+} = require('internal/errors');
+
+const {
+  kStandaloneREPL,
+} = require('internal/repl/utils');
+
+
+const { inspect } = require('internal/util/inspect');
+const { Interface } = require('readline');
+
+const {
+  commonPrefix
+} = require('internal/readline/utils');
+
+const {
+    isIdentifierStart,
+    isIdentifierChar
+} = require('internal/deps/acorn/acorn/dist/acorn');
+
+
+const {
+    makeRequireFunction,
+    addBuiltinLibsToObject
+} = require('internal/modules/cjs/helpers');
+
+
+const vm = require('vm');
+const { Console } = require('console');
+
+
+
+
+const globalBuiltins =new Set(vm.runInNewContext('Object.getOwnPropertyNames(globalthat)'));
+
+const { sendInspectorCommand } = require('internal/util/inspector');
+const fsAutoCompleteRE = /fs(?:\.promises)?\.\s*[a-z][a-zA-Z]+\(\s*["'](.*)/;
+const requireRE = /\brequire\s*\(\s*['"`](([\w@./-]+\/)?(?:[\w@./-]*))(?![^'"`])$/;
+const versionedFileNamesRe = /-\d+\.\d+/;
+const simpleExpressionRE = /(?:[a-zA-Z_$](?:\w|\$)*\??\.)*[a-zA-Z_$](?:\w|\$)*\??\.?$/;
+
+const kBufferedCommandSymbol = Symbol('bufferedCommand');
+
+
+const domainSet = new WeakSet();
+
+let addedNewListener = false;
+let nextREPLResourceNumber = 1;
+
+
+function set_module_filename(m) {
+    try {
+      // Hack for require.resolve("./relative") to work properly.
+      m.filename = path.resolve('repl');
+    } catch {
+      // path.resolve('repl') fails when the current working directory has been
+      // deleted.  Fall back to the directory name of the (absolute) executable
+      // path.  It's not really correct but what are the alternatives?
+      const dirname = path.dirname(process.execPath);
+      m.filename = path.resolve(dirname, 'repl');
+    }
+    // Hack for repl require to work properly with node_modules folders
+    m.paths = CJSModule._nodeModulePaths(module.filename);
+}
+
+
+function get_dflt_writer() {
+    // This is the default "writer" value, if none is passed in the REPL options,
+    // and it can be overridden by custom print functions, such as `probe` or
+    // `eyes.js`.
+    const writer = (obj) => inspect(obj, writer.options);
+    writer.options = { ...inspect.defaultOptions, showProxy: true };
+    return(writer)
+}
+
+
+
+  
+
+
+function defineUnderscoreError(that) {
+    ObjectDefineProperty(that.context, '_error', {
+      configurable: true,
+      get: () => that.lastError,
+      set: (value) => {
+        that.lastError = value;
+        if (!that.underscoreErrAssigned) {
+          that.underscoreErrAssigned = true;
+          that.output.write('Expression assignment to _error now disabled.\n');
+        }
+      }
+    });
+}
+
+function defineUnderscore(that) {
+    ObjectDefineProperty(that.context, '_', {
+      configurable: true,
+      get: () => that.last,
+      set: (value) => {
+        that.last = value;
+        if (!that.underscoreAssigned) {
+          that.underscoreAssigned = true;
+          that.output.write('Expression assignment to _ now disabled.\n');
+        }
+      }
+    });
+}
+
+
+function resetContext(that) {
+    that.context = that.createContext();
+    that.underscoreAssigned = false;
+    that.underscoreErrAssigned = false;
+    // TODO(BridgeAR): Deprecate the lines.
+    that.lines = [];
+    that.lines.level = [];
+    defineUnderscore(that);
+    defineUnderscoreError(that);
+    // Allow REPL extensions to extend the new context
+    that.emit('reset', that.context);
+}
+
+
+
+
+
+
+
+function addCommonWords(completionGroups) {
+  // Only words which do not yet exist as global property should be added to
+  // this list.
+  completionGroups.push([
+    'async', 'await', 'break', 'case', 'catch', 'const', 'continue',
+    'debugger', 'default', 'delete', 'do', 'else', 'export', 'false',
+    'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let',
+    'new', 'null', 'return', 'switch', 'this', 'throw', 'true', 'try',
+    'typeof', 'var', 'void', 'while', 'with', 'yield'
+  ]);
+}
+
+function creatRecoverable(){
+    function Recoverable(err) { this.err = err;}
+    ObjectSetPrototypeOf(Recoverable.prototype, SyntaxErrorPrototype);
+    ObjectSetPrototypeOf(Recoverable, SyntaxError);
+    return(Recoverable)
+}
+
+function _turnOnEditorMode(repl) {
+  repl.editorMode = true;
+  Interface.prototype.setPrompt.call(repl, '');
+}
+
+function _turnOffEditorMode(repl) {
+  repl.editorMode = false;
+  repl.setPrompt(repl._initialPrompt);
+}
+
+
+function defineCommand(that,keyword, cmd) {
+  if (typeof cmd === 'function') {
+    cmd = { action: cmd };
+  } else if (typeof cmd.action !== 'function') {
+    throw new ERR_INVALID_ARG_TYPE('cmd.action', 'Function', cmd.action);
+  }
+  that.commands[keyword] = cmd;
+};
+
+
+function defineBreakCommand(repl) {
+    repl.defineCommand('break', {
+      help: 'Sometimes you get stuck, repl gets you out',
+      action: function() {
+        repl.clearBufferedCommand();
+        repl.displayPrompt();
+      }
+    });
+}
+
+
+
+function defineClearCommand(repl) {
+    let clearMessage;
+    if (repl.useGlobal) {
+      clearMessage = 'Alias for .break';
+    } else {
+      clearMessage = 'Break, and also clear the local context';
+    }
+    repl.defineCommand('clear', {
+      help: clearMessage,
+      action: function() {
+        repl.clearBufferedCommand();
+        if (!repl.useGlobal) {
+          repl.output.write('Clearing context...\n');
+          repl.resetContext();
+        }
+        repl.displayPrompt();
+      }
+    });
+}
+
+
+function defineExitCommand(repl) {
+    repl.defineCommand('exit', {
+      help: 'Exit the REPL',
+      action: function() {
+        repl.close();
+      }
+    });
+}
+
+
+function defineHelpCommand(repl) {
+    repl.defineCommand('help', {
+      help: 'Print repl help message',
+      action: function() {
+        const names = ObjectKeys(repl.commands).sort();
+        const longestNameLength = names.reduce(
+          (max, name) => MathMax(max, name.length),
+          0
+        );
+        for (let n = 0; n < names.length; n++) {
+          const name = names[n];
+          const cmd = repl.commands[name];
+          const spaces = ' '.repeat(longestNameLength - name.length + 3);
+          const line = `.${name}${cmd.help ? spaces + cmd.help : ''}\n`;
+          repl.output.write(line);
+        }
+        repl.output.write('\nPress Ctrl+C to abort current expression, ' +
+          'Ctrl+D to exit the REPL\n');
+        repl.displayPrompt();
+      }
+    });
+}
+
+function defineSaveCommand(repl) {
+    repl.defineCommand('save', {
+      help: 'Save all evaluated commands in repl REPL session to a file',
+      action: function(file) {
+        try {
+          fs.writeFileSync(file, repl.lines.join('\n'));
+          repl.output.write(`Session saved to: ${file}\n`);
+        } catch {
+          repl.output.write(`Failed to save: ${file}\n`);
+        }
+        repl.displayPrompt();
+      }
+    });
+}
+
+function defineEditorCommand(repl) {
+    if (repl.terminal) {
+      repl.defineCommand('editor', {
+        help: 'Enter editor mode',
+        action() {
+          _turnOnEditorMode(repl);
+          repl.output.write(
+            '// Entering editor mode (Ctrl+D to finish, Ctrl+C to cancel)\n');
+        }
+      });
+    }
+}
+function defineLoadCommand(repl) {
+  repl.defineCommand('load', {
+    help: 'Load JS from a file into the REPL session',
+    action: function(file) {
+      try {
+        const stats = fs.statSync(file);
+        if (stats && stats.isFile()) {
+          _turnOnEditorMode(repl);
+          const data = fs.readFileSync(file, 'utf8');
+          repl.write(data);
+          _turnOffEditorMode(repl);
+          repl.write('\n');
+        } else {
+          repl.output.write(`Failed to load: ${file} is not a valid file\n`);
+        }
+      } catch {
+        repl.output.write(`Failed to load: ${file}\n`);
+      }
+      repl.displayPrompt();
+    }
+  });
+}
+function defineDefaultCommands(repl) {
+    defineBreakCommand(repl);
+    defineClearCommand(repl);
+    defineExitCommand(repl);
+    defineHelpCommand(repl);
+    defineSaveCommand(repl);
+    defineLoadCommand(repl);
+    defineEditorCommand(repl);
+}
+
+
+function _memory(that,cmd) {
+    that.lines = that.lines || [];
+    that.lines.level = that.lines.level || [];
+    // Save the line so I can do magic later
+    if (cmd) {
+      const len = that.lines.level.length ? that.lines.level.length - 1 : 0;
+      that.lines.push('  '.repeat(len) + cmd);
+    } else {
+      // I don't want to not change the format too much...
+      that.lines.push('');
+    }
+    if (!cmd) {
+      that.lines.level = [];
+      return;
+    }
+    let dw = cmd.match(/[{(]/g);
+    let up = cmd.match(/[})]/g);
+    up = up ? up.length : 0;
+    dw = dw ? dw.length : 0;
+    let depth = dw - up;
+    if (depth) {
+        (function workIt() {
+           if (depth > 0) {
+             that.lines.level.push({
+               line: that.lines.length - 1,
+               depth: depth
+             });
+           } else if (depth < 0) {
+             // Going... up.
+             const curr = that.lines.level.pop();
+             if (curr) {
+               const tmp = curr.depth + depth;
+               if (tmp < 0) {
+                 // More to go, recurse
+                 depth += curr.depth;
+                 workIt();
+               } else if (tmp > 0) {
+                 // Remove and push back
+                 curr.depth += depth;
+                 that.lines.level.push(curr);
+               }
+             }
+           }
+         }());
+    }
+}
+
+
+const completeOnEditorMode = (callback) => (err, results) => {
+    if (err) return callback(err);
+    const [completions, completeOn = ''] = results;
+    let result = completions.filter((v) => v);
+    if (completeOn && result.length !== 0) {
+      result = [commonPrefix(result)];
+    }
+    callback(null, [result, completeOn]);
+};
+
+
+function isIdentifier(str) {
+  if (str === '') {
+    return false;
+  }
+  const first = str.codePointAt(0);
+  if (!isIdentifierStart(first)) {
+    return false;
+  }
+  const firstLen = first > 0xffff ? 2 : 1;
+  for (let i = firstLen; i < str.length; i += 1) {
+    const cp = str.codePointAt(i);
+    if (!isIdentifierChar(cp)) {
+      return false;
+    }
+    if (cp > 0xffff) {
+      i += 1;
+    }
+  }
+  return true;
+}
+
+
+function setOnClose(that,paused,pausedBuffer) {
+    that.on('close', function emitExit() {
+      if (paused) {
+        pausedBuffer.push(['close']);
+        return;
+      }
+      that.emit('exit');
+    });
+}
+
+function displayPrompt(that,preserveCursor) {
+    let prompt = that._initialPrompt;
+    if (that[kBufferedCommandSymbol].length) {
+      prompt = '...';
+      const len = that.lines.level.length ? that.lines.level.length - 1 : 0;
+      const levelInd = '..'.repeat(len);
+      prompt += levelInd + ' ';
+    }
+    // Do not overwrite `_initialPrompt` here
+    Interface.prototype.setPrompt.call(that, prompt);
+    that.prompt(preserveCursor);
+};
+
+
+function _setPrompt(that,prompt) {
+    //When invoked as an API method, overwrite _initialPrompt
+    that._initialPrompt = prompt;
+    Interface.prototype.setPrompt.call(that, prompt);
+};
+
+
+function completeREPLcommands(that,completionGroups,completeOn,line,filter) {
+    completionGroups.push(ObjectKeys(that.commands));
+    completeOn = line.match(/^\s*\.(\w*)$/)[1];
+    if (completeOn.length) {
+      filter = completeOn;
+    }
+    return([filter,completeOn])
+}
+
+
+function getCompleteRequirePaths(that,m,line,completeOn,filter,group) {
+    // require('...<Tab>')
+    const extensions = ObjectKeys(that.context.require.extensions);
+    const indexes = extensions.map((extension) => `index${extension}`);
+    indexes.push('package.json', 'index');
+    const match = line.match(requireRE);
+    completeOn = match[1];
+    const subdir = match[2] || '';
+    filter = completeOn;
+    group = [];
+    let paths = [];
+    if (completeOn === '.') {
+      group = ['./', '../'];
+    } else if (completeOn === '..') {
+      group = ['../'];
+    } else if (/^\.\.?\//.test(completeOn)) {
+      paths = [process.cwd()];
+    } else {
+      paths = m.paths.concat(CJSModule.globalPaths);
+    }
+    return([completeOn ,filter,group,paths,indexes,subdir])
+}
+
+
+function  fillCompleteRequireGroupWithPaths(group,indexes,paths) {
+    for (let dir of paths) {
+        dir = path.resolve(dir, subdir);
+        const dirents = gracefulReaddir(dir, { withFileTypes: true }) || [];
+        for (const dirent of dirents) {
+            if (versionedFileNamesRe.test(dirent.name) || dirent.name === '.npm') {
+                continue;
+            }
+            const extension = path.extname(dirent.name);
+            const base = dirent.name.slice(0, -extension.length);
+            if (!dirent.isDirectory()) {
+                if (extensions.includes(extension) && (!subdir || base !== 'index'))  {
+                    group.push(`${subdir}${base}`);
+                }
+                continue;
+            }
+            group.push(`${subdir}${dirent.name}/`);
+            const absolute = path.resolve(dir, dirent.name);
+            const subfiles = gracefulReaddir(absolute) || [];
+            for (const subfile of subfiles) {
+                if (indexes.includes(subfile)) {
+                    group.push(`${subdir}${dirent.name}`);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+
+function completeRequire(that,m,line,completeOn,filter,group) {
+    let paths;
+    let indexes;
+    [completeOn ,filter,group,paths,indexes] = getCompleteRequirePaths(that,m,line,completeOn,filter,group);
+    fillCompleteRequireGroupWithPaths(group,indexes,paths);
+    if (group.length) {completionGroups.push(group);}
+    if (!subdir) {completionGroups.push(_builtinLibs);}
+    return([filter,completeOn,group])
+}
+
+function getCompleteSimpleExpr(line,completionGroups,filter,callback,completeOn) {
+    const [match] = simpleExpressionRE.exec(line) || [''];
+    if (line.length !== 0 && !match) {
+        completionGroupsLoaded(completionGroups,filter,callback,completeOn);
+        return;
+    }
+    let expr = '';
+    completeOn = match;
+    if (line.endsWith('.')) {
+      expr = match.slice(0, -1);
+    } else if (line.length !== 0) {
+      const bits = match.split('.');
+      filter = bits.pop();
+      expr = bits.join('.');
+    }
+    return([expr,completeOn,filter])
+}
+
+function filteredOwnPropertyNames(obj) {
+    if (!obj) return [];
+    const filter = ALL_PROPERTIES | SKIP_SYMBOLS;
+    return getOwnNonIndexProperties(obj, filter).filter(isIdentifier);
+}
+
+
+function getGlobalLexicalScopeNames(contextId) {
+    return sendInspectorCommand((session) => {
+      let names = [];
+      session.post(
+          'Runtime.globalLexicalScopeNames', 
+          {executionContextId: contextId}, 
+          (error, result) => {
+              if (!error) names = result.names;
+          }
+      );
+      return names;
+    }, () => []);
+}
+
+
+function gracefulReaddir(...args) {
+    try {
+      return fs.readdirSync(...args);
+    } catch {}
+}
+
+function completeFSFunctions(line) {
+    let baseName = '';
+    let filePath = line.match(fsAutoCompleteRE)[1];
+    let fileList = gracefulReaddir(filePath, { withFileTypes: true });
+    if (!fileList) {
+      baseName = path.basename(filePath);
+      filePath = path.dirname(filePath);
+      fileList = gracefulReaddir(filePath, { withFileTypes: true }) || [];
+    }
+    const completions = fileList
+      .filter((dirent) => dirent.name.startsWith(baseName))
+      .map((d) => d.name);
+    return [[completions], baseName];
+}
+
+
+function uniqCompletionsAcrossAllGroups(completionGroups) {
+    const completions = [];
+    // Unique completions across all groups.
+    const uniqueSet = new Set(['']);
+    // Completion group 0 is the "closest" (least far up the inheritance
+    // chain) so we put its completions last: to be closest in the REPL.
+    for (const group of completionGroups) {
+      group.sort((a, b) => (b > a ? 1 : -1));
+      const setSize = uniqueSet.size;
+      for (const entry of group) {
+        if (!uniqueSet.has(entry)) {
+          completions.unshift(entry);
+          uniqueSet.add(entry);
+        }
+      }
+      // Add a separator between groups.
+      if (uniqueSet.size !== setSize) {
+        completions.unshift('');
+      }
+    }
+    return(completions)
+}
+
+
+function filterCompletionGroups(completionGroups,filter){
+    if (completionGroups.length && filter) {
+      const newCompletionGroups = [];
+      for (const group of completionGroups) {
+        const filteredGroup = group.filter((str) => str.startsWith(filter));
+        if (filteredGroup.length) {
+          newCompletionGroups.push(filteredGroup);
+        }
+      }
+      completionGroups = newCompletionGroups;
+    }
+    return(completionGroups)
+}
+
+function resolveEmptyExprAndGetCompletions(that,expr,completionGroups,filter,callback,completeOn) {
+    // Get global vars synchronously
+    completionGroups.push(getGlobalLexicalScopeNames(that[kContextId]));
+    let contextProto = that.context;
+    while (contextProto = ObjectGetPrototypeOf(contextProto)) {
+        completionGroups.push(filteredOwnPropertyNames(contextProto));
+    }
+    const contextOwnNames = filteredOwnPropertyNames(that.context);
+    if (!that.useGlobal) {
+      // When the context is not `global`, builtins are not own
+      // properties of it.
+      contextOwnNames.push(...globalBuiltins);
+    }
+    completionGroups.push(contextOwnNames);
+    if (filter !== '') addCommonWords(completionGroups);
+    completionGroupsLoaded(completionGroups,filter,callback,completeOn);
+}
+
+
+function getREPLResourceName() {
+    // This prevents v8 code cache from getting confused and using a different
+    // cache from a resource of the same name
+    return `REPL${nextREPLResourceNumber++}`;
+}
+
+
+function resolveExprAndGetCompletions(that,expr,memberGroups,filter,callback,completeOn) {
+    let chaining = '.';
+    if (StringPrototypeEndsWith(expr, '?')) {
+        expr = StringPrototypeSlice(expr, 0, -1);
+        chaining = '?.';
+    }
+    const memberGroups = [];
+    const evalExpr = `try { ${expr} } catch {}`;
+    that.eval(
+        evalExpr,
+        that.context,
+        getREPLResourceName(),
+        (e, obj) => {
+            try {
+                let p;
+                if ((typeof obj === 'object' && obj !== null) || typeof obj === 'function') {
+                    memberGroups.push(filteredOwnPropertyNames(obj));
+                    p = ObjectGetPrototypeOf(obj);
+                } else {
+                    p = obj.constructor ? obj.constructor.prototype : null;
+                }
+                // Circular refs possible? Let's guard against that.
+                let sentinel = 5;
+                while (p !== null && sentinel-- !== 0) {
+                    memberGroups.push(filteredOwnPropertyNames(p));
+                    p = ObjectGetPrototypeOf(p);
+                }
+            } catch {
+            }
+            if (memberGroups.length) {
+                expr += chaining;
+                for (const group of memberGroups) {
+                    ArrayPrototypePush(
+                        completionGroups,
+                        ArrayPrototypeMap(group,(member) => `${expr}${member}`)
+                    );
+                }
+                if (filter) {
+                    filter = `${expr}${filter}`;
+                }
+            }
+            completionGroupsLoaded(completionGroups,filter,callback,completeOn);
+        }
+    )
+    return(filter)
+}
+
+
+function complete(that,m,line,callback) {
+    // List of completion lists, one for each inheritance "level"
+    let completionGroups = [];
+    let completeOn, group;
+    // Ignore right whitespace. It could change the outcome.
+    line = line.trimLeft();
+    // REPL commands (e.g. ".break").
+    let filter = '';
+    if (/^\s*\.(\w*)$/.test(line)) {
+        [
+            filter,
+            completeOn
+        ] = completeREPLcommands(that,completionGroups,completeOn,line,filter);
+    
+    } else if (requireRE.test(line)) {
+        [
+            filter,
+            completeOn,
+            group
+        ] = completeRequire(that,m,line,completeOn,filter,group);
+    
+    } else if (fsAutoCompleteRE.test(line)) {
+       [
+           completionGroups,
+           completeOn
+       ] = completeFSFunctions(line);
+    
+    } else if (line.length === 0 || /\w|\.|\$/.test(line[line.length - 1])) {
+        let expr;
+        [
+            expr,
+            completeOn,
+            filter
+        ]=getCompleteSimpleExpr(line,completionGroups,filter,callback,completeOn); 
+        ////
+        if (!expr) {
+            resolveEmptyExprAndGetCompletions(that,expr,completionGroups,filter,callback,completeOn);
+            return;
+        } else {
+            resolveExprAndGetCompletions(that,expr,memberGroups,filter,callback,completeOn)
+            return;
+        }
+    }
+    return completionGroupsLoaded(completionGroups,filter,callback,completeOn)
+}
+
+
+function completionGroupsLoaded(completionGroups,filter,callback,completeOn) {
+    // Will be called when all completionGroups are in place
+    // Useful for async autocompletion
+    completionGroups = filterCompletionGroups(completionGroups,filter);
+    const completions  = uniqCompletionsAcrossAllGroups(completionGroups);
+    // Remove obsolete group entry, if present.
+    if (completions[0] === '') {completions.shift();}
+    callback(null, [completions, completeOn]);
+}
+
+
+function createContext(that,parentModule) {
+    let context;
+    if (that.useGlobal) {
+        context = global;
+    } else {
+        sendInspectorCommand(
+            (session) => {
+                session.post('Runtime.enable');
+                session.once(
+                    'Runtime.executionContextCreated',
+                    ({ params }) => {
+                        that[kContextId] = params.context.id;
+                    }
+                );
+                context = vm.createContext();
+                session.post('Runtime.disable');
+            },
+            () => {context = vm.createContext();}
+        )
+        ////
+        for (const name of ObjectGetOwnPropertyNames(global)) {
+            if (!globalBuiltins.has(name)) {
+                ObjectDefineProperty(
+                    context,
+                    name,
+                    ObjectGetOwnPropertyDescriptor(global, name)
+                );
+
+            }
+        }
+        context.global = context;
+        const _console = new Console(that.output);
+        ObjectDefineProperty(
+            context,
+            'console',
+            {
+                configurable: true,
+                writable: true,
+                value: _console
+            }
+        )
+    }
+    ////
+    const replModule = new CJSModule('<repl>');
+    replModule.paths = CJSModule._resolveLookupPaths('<repl>', parentModule);
+    ObjectDefineProperty(context, 'module', {
+        configurable: true,
+        writable: true,
+        value: replModule
+    });
+    ObjectDefineProperty(context, 'require', {
+        configurable: true,
+        writable: true,
+        value: makeRequireFunction(replModule)
+    });
+    addBuiltinLibsToObject(context);
+    return context;
+}
+
+
+function _close(that) {
+    if (that.terminal && that._flushing && !that._closingOnFlush) {
+        that._closingOnFlush = true;
+        that.once('flushHistory', () =>Interface.prototype.close.call(that));
+        return;
+    }
+    process.nextTick(() =>Interface.prototype.close.call(that));
+}
+
+
+
+
+module.exports = {
+    ////
+    fsAutoCompleteRE,
+    kBufferedCommandSymbol,
+    ////
+    set_module_filename,
+    get_dflt_writer,
+    ////
+    domainSet,
+    addedNewListener,
+    nextREPLResourceNumber,
+    getREPLResourceName,
+    ////
+    ////
+    addCommonWords,
+    _turnOnEditorMode,
+    _turnOffEditorMode,
+    defineCommand,
+    defineBreakCommand,
+    defineClearCommand,
+    defineExitCommand,
+    defineHelpCommand,
+    defineSaveCommand,
+    defineEditorCommand,
+    defineLoadCommand,
+    defineDefaultCommands,
+    _memory,
+    completeOnEditorMode,
+    isIdentifier,
+    setOnClose,
+    resetContext,
+    displayPrompt,
+    _setPrompt,
+    completeREPLcommands,
+    getCompleteRequirePaths,
+    fillCompleteRequireGroupWithPaths,
+    completeRequire,
+    getCompleteSimpleExpr,
+    resolveEmptyExprAndGetCompletions,
+    resolveExprAndGetCompletions,
+    complete,
+    filteredOwnPropertyNames,
+    getGlobalLexicalScopeNames,
+    gracefulReaddir,
+    completeFSFunctions,
+    uniqCompletionsAcrossAllGroups,
+    filterCompletionGroups,
+    completionGroupsLoaded,
+    createContext,
+    _close,
+    ////
+}

@@ -7419,6 +7419,7 @@ class V8_EXPORT MicrotaskQueue {
   static std::unique_ptr<MicrotaskQueue> New(
       Isolate* isolate, MicrotasksPolicy policy = MicrotasksPolicy::kAuto);
 
+
   virtual ~MicrotaskQueue() = default;
 
   /**
