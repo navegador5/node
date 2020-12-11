@@ -31,6 +31,7 @@
     'node_intermediate_lib_type%': 'static_library',
     'node_builtin_modules_path%': '',
     'library_files': [
+      'lib/tst_wrap.js',
       'lib/nv_tool.js',
       'lib/html/tree/util.js',
       'lib/html/tree/cmmn.js',
@@ -681,6 +682,8 @@
         'src/udp_wrap.cc',
         'src/util.cc',
         'src/uv.cc',
+        'src/tst_wrap.cc',
+        'src/tst_wrap.h'
         # headers to make for a more pleasant IDE experience
         'src/aliased_buffer.h',
         'src/aliased_struct.h',

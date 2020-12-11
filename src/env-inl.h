@@ -408,6 +408,14 @@ inline uv_idle_t* Environment::immediate_idle_handle() {
   return &immediate_idle_handle_;
 }
 
+////
+inline uv_prepare_t* Environment::prepare_handle() {
+  return &prepare_handle_;
+}
+
+////
+
+
 inline void Environment::RegisterHandleCleanup(uv_handle_t* handle,
                                                HandleCleanupCb cb,
                                                void* arg) {

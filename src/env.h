@@ -980,6 +980,15 @@ class Environment : public MemoryRetainer {
   inline void PushAsyncCallbackScope();
   inline void PopAsyncCallbackScope();
 
+  //
+  static  void loop_counter(uv_prepare_t* handle);
+  uint64_t GetLoopCount();
+  bool IsTimerActive();
+  bool IsIdleActive();
+  bool IsPrepareActive();
+  bool IsCheckActive();
+  //
+
   static inline Environment* GetCurrent(v8::Isolate* isolate);
   static inline Environment* GetCurrent(v8::Local<v8::Context> context);
   static inline Environment* GetCurrent(
@@ -1072,6 +1081,7 @@ class Environment : public MemoryRetainer {
   static inline Environment* from_immediate_check_handle(uv_check_t* handle);
   inline uv_check_t* immediate_check_handle();
   inline uv_idle_t* immediate_idle_handle();
+  inline uv_prepare_t* prepare_handle(); 
 
   inline void IncreaseWaitingRequestCounter();
   inline void DecreaseWaitingRequestCounter();
@@ -1397,6 +1407,9 @@ class Environment : public MemoryRetainer {
   uv_timer_t timer_handle_;
   uv_check_t immediate_check_handle_;
   uv_idle_t immediate_idle_handle_;
+  //
+  uv_prepare_t prepare_handle_;
+  //
   uv_async_t task_queues_async_;
   int64_t task_queues_async_refs_ = 0;
 

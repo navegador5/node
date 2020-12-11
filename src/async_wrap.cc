@@ -410,6 +410,10 @@ static void FullPromiseHook(PromiseHookType type, Local<Promise> promise,
   }
 }
 
+
+
+
+
 static void SetupHooks(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
 
@@ -615,6 +619,9 @@ Local<FunctionTemplate> AsyncWrap::GetConstructorTemplate(Environment* env) {
   return tmpl;
 }
 
+
+
+
 void AsyncWrap::Initialize(Local<Object> target,
                            Local<Value> unused,
                            Local<Context> context,
@@ -622,7 +629,9 @@ void AsyncWrap::Initialize(Local<Object> target,
   Environment* env = Environment::GetCurrent(context);
   Isolate* isolate = env->isolate();
   HandleScope scope(isolate);
-
+  
+  ////
+  ////
   env->SetMethod(target, "setupHooks", SetupHooks);
   env->SetMethod(target, "setCallbackTrampoline", SetCallbackTrampoline);
   env->SetMethod(target, "pushAsyncContext", PushAsyncContext);
@@ -717,6 +726,8 @@ void AsyncWrap::Initialize(Local<Object> target,
 
 void AsyncWrap::RegisterExternalReferences(
     ExternalReferenceRegistry* registry) {
+  ////
+  ////
   registry->Register(SetupHooks);
   registry->Register(SetCallbackTrampoline);
   registry->Register(PushAsyncContext);
@@ -924,11 +935,14 @@ void AsyncWrap::EmitAsyncInit(Environment* env,
 }
 
 
+
 MaybeLocal<Value> AsyncWrap::MakeCallback(const Local<Function> cb,
                                           int argc,
                                           Local<Value>* argv) {
+  
+  //
+  //
   EmitTraceEventBefore();
-
   ProviderType provider = provider_type();
   async_context context { get_async_id(), get_trigger_async_id() };
   MaybeLocal<Value> ret = InternalMakeCallback(

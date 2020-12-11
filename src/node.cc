@@ -1068,7 +1068,6 @@ int Start(int argc, char** argv) {
       }
     }
     uv_loop_configure(uv_default_loop(), UV_METRICS_IDLE_TIME);
-
     NodeMainInstance main_instance(&params,
                                    uv_default_loop(),
                                    per_process::v8_platform.Platform(),

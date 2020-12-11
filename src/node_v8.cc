@@ -26,6 +26,9 @@
 #include "util-inl.h"
 #include "v8.h"
 
+namespace v8i = v8::internal;
+
+
 namespace node {
 
 using v8::Array;
@@ -43,7 +46,6 @@ using v8::String;
 using v8::Uint32;
 using v8::V8;
 using v8::Value;
-
 
 #define HEAP_STATISTICS_PROPERTIES(V)                                         \
   V(0, total_heap_size, kTotalHeapSizeIndex)                                  \

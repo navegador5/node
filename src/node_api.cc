@@ -14,6 +14,8 @@
 
 #include <memory>
 
+
+
 struct node_napi_env__ : public napi_env__ {
   explicit node_napi_env__(v8::Local<v8::Context> context):
       napi_env__(context) {

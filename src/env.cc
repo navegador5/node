@@ -28,6 +28,10 @@
 #include <limits>
 #include <memory>
 
+#include <stdio.h>
+#include <stdlib.h>
+
+
 namespace node {
 
 using errors::TryCatchScope;
@@ -517,6 +521,43 @@ Environment::~Environment() {
   CHECK_EQ(base_object_count_, 0);
 }
 
+
+////
+
+bool Environment::IsTimerActive() {
+    bool ret =  uv_is_active(
+            reinterpret_cast<uv_handle_t*>(timer_handle())
+    );
+    return(ret);
+}
+
+bool Environment::IsIdleActive() {
+    bool ret =  uv_is_active(
+            reinterpret_cast<uv_handle_t*>(immediate_idle_handle())
+    ); 
+    return(ret);
+}
+
+bool Environment::IsPrepareActive() {
+    bool ret =  uv_is_active(
+            reinterpret_cast<uv_handle_t*>(prepare_handle())
+    );
+    return(ret);
+}
+
+
+bool Environment::IsCheckActive() {
+    bool ret =  uv_is_active(
+            reinterpret_cast<uv_handle_t*>(immediate_check_handle())
+    );
+    return(ret);
+}
+
+
+////
+
+
+
 void Environment::InitializeLibuv() {
   HandleScope handle_scope(isolate());
   Context::Scope context_scope(context());
@@ -528,8 +569,16 @@ void Environment::InitializeLibuv() {
   uv_unref(reinterpret_cast<uv_handle_t*>(immediate_check_handle()));
 
   uv_idle_init(event_loop(), immediate_idle_handle());
+  //uv_idle_start(immediate_idle_handle(), [](uv_idle_t*){ });
+  //uv_idle_start(immediate_idle_handle(), loop_counter);
 
   uv_check_start(immediate_check_handle(), CheckImmediate);
+
+
+  uv_prepare_init(event_loop(), prepare_handle());
+  uv_prepare_start(prepare_handle(),loop_counter);
+
+  //uv_prepare_start(prepare_handle(),[](uv_prepare_t*){ });
 
   uv_async_init(
       event_loop(),
@@ -582,6 +631,9 @@ void Environment::RegisterHandleCleanups() {
   register_handle(reinterpret_cast<uv_handle_t*>(timer_handle()));
   register_handle(reinterpret_cast<uv_handle_t*>(immediate_check_handle()));
   register_handle(reinterpret_cast<uv_handle_t*>(immediate_idle_handle()));
+  ////
+  register_handle(reinterpret_cast<uv_handle_t*>(prepare_handle()));
+  ////
   register_handle(reinterpret_cast<uv_handle_t*>(&task_queues_async_));
 }
 
@@ -863,6 +915,15 @@ void Environment::RunTimers(uv_timer_t* handle) {
 }
 
 
+uint64_t kLoopCount =0;
+void Environment::loop_counter(uv_prepare_t* handle) {
+    ++kLoopCount;
+}
+
+uint64_t Environment::GetLoopCount() {
+    return(kLoopCount);
+}
+
 void Environment::CheckImmediate(uv_check_t* handle) {
   Environment* env = Environment::from_immediate_check_handle(handle);
   TraceEventScope trace_scope(TRACING_CATEGORY_NODE1(environment),
@@ -876,6 +937,7 @@ void Environment::CheckImmediate(uv_check_t* handle) {
   if (env->immediate_info()->count() == 0 || !env->can_call_into_js())
     return;
 
+
   do {
     MakeCallback(env->isolate(),
                  env->process_object(),
@@ -888,6 +950,8 @@ void Environment::CheckImmediate(uv_check_t* handle) {
   if (env->immediate_info()->ref_count() == 0)
     env->ToggleImmediateRef(false);
 }
+
+
 
 void Environment::ToggleImmediateRef(bool ref) {
   if (started_cleanup_) return;

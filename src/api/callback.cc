@@ -3,6 +3,8 @@
 #include "env-inl.h"
 #include "v8.h"
 
+
+
 namespace node {
 
 using v8::Context;
@@ -78,7 +80,10 @@ InternalCallbackScope::~InternalCallbackScope() {
   env_->PopAsyncCallbackScope();
 }
 
+
 void InternalCallbackScope::Close() {
+
+
   if (closed_) return;
   closed_ = true;
 
@@ -151,7 +156,8 @@ MaybeLocal<Value> InternalMakeCallback(Environment* env,
                                        int argc,
                                        Local<Value> argv[],
                                        async_context asyncContext) {
-  CHECK(!recv.IsEmpty());
+  
+    CHECK(!recv.IsEmpty());
 #ifdef DEBUG
   for (int i = 0; i < argc; i++)
     CHECK(!argv[i].IsEmpty());
@@ -170,6 +176,8 @@ MaybeLocal<Value> InternalMakeCallback(Environment* env,
         async_hooks->fields()[AsyncHooks::kAfter] +
         async_hooks->fields()[AsyncHooks::kUsesExecutionAsyncResource] > 0;
   }
+
+
 
   InternalCallbackScope scope(env, resource, asyncContext, flags);
   if (scope.Failed()) {

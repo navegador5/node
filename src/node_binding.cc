@@ -95,13 +95,23 @@
   V(watchdog)                                                                  \
   V(zlib)
 
+
+//extended customer module
+#define NODE_BUILTIN_EXTEND_MODULES(V)\
+    V(tst_wrap)
+
+
+
+
 #define NODE_BUILTIN_MODULES(V)                                                \
   NODE_BUILTIN_STANDARD_MODULES(V)                                             \
   NODE_BUILTIN_OPENSSL_MODULES(V)                                              \
   NODE_BUILTIN_QUIC_MODULES(V)                                                 \
   NODE_BUILTIN_ICU_MODULES(V)                                                  \
   NODE_BUILTIN_PROFILER_MODULES(V)                                             \
-  NODE_BUILTIN_DTRACE_MODULES(V)
+  NODE_BUILTIN_DTRACE_MODULES(V)\
+  NODE_BUILTIN_EXTEND_MODULES(V)
+        
 
 // This is used to load built-in modules. Instead of using
 // __attribute__((constructor)), we call the _register_<modname>
