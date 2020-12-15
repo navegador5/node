@@ -79,22 +79,26 @@ using v8::Context;
 using v8::DontDelete;
 using v8::FunctionCallbackInfo;
 using v8::Integer;
+using v8::Int32;
 using v8::Isolate;
 using v8::Local;
 using v8::Map;
 using v8::Object;
 using v8::PropertyAttribute;
 using v8::ReadOnly;
+using v8::None;
 using v8::String;
+using v8::Name;
 using v8::Value;
 using v8::NewStringType;
 using v8::Number;
 using v8::Exception;
 using v8::BigInt;
 using v8::Boolean;
-
-
-
+using v8::FunctionTemplate;
+using v8::ObjectTemplate;
+using v8::PropertyAttribute;
+using v8::MaybeLocal;
 
 void ErrName(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
@@ -221,32 +225,92 @@ static void SetMaxLoopRound(const FunctionCallbackInfo<Value>& args) {
 }
 
 
+void add_prop_to_ot(
+    Isolate* isolate,
+    Local<ObjectTemplate> ot,
+    const char* name,
+    Local<Value> value,
+    PropertyAttribute attributes
+) {
+    Local<Name> key = String::NewFromUtf8(isolate, name, NewStringType::kNormal).ToLocalChecked();
+    ot->Set(key,value,attributes);
+}
+
 
 void GetMainLoop(const FunctionCallbackInfo<Value>& args) {
-    //
+    ////isolate 与 context
     Isolate* isolate = args.GetIsolate();
-    //Local<Context> context = isolate->GetCurrentContext();
+    Local<Context> context = isolate->GetCurrentContext();
+    ////创建一个对象模板
+    Local<FunctionTemplate> constructor = Local<FunctionTemplate>();
+    Local<ObjectTemplate> ot = ObjectTemplate::New(isolate, constructor);
+    ////
     uv_loop_t* loop = node::GetCurrentEventLoop(isolate);
-    //void * data
-    unsigned int active_handles = loop->active_handles;
-    Local<BigInt> ah = BigInt::NewFromUnsigned(isolate, active_handles);
-    //void * handle_queue[2]
-    //union active_reqs
-    //
-    //uint64_t timer_counter = loop->timer_counter;
-    //Local<BigInt> tc = BigInt::NewFromUnsigned(isolate, timer_counter);
-    //
-    //uint64_t time = loop->time;
-    //Local<BigInt> tm = BigInt::NewFromUnsigned(isolate, time);
-    //
-    /*
+    ////void* data;
+    ////unsigned int active_handles
+    Local<Integer> ah_value = Integer::NewFromUnsigned(isolate,loop->active_handles); 
+    add_prop_to_ot(isolate,ot,"active_handles",ah_value,PropertyAttribute::None);     
+    ////void* handle_queue[2];
+    ////unsigned int active_reqs;
+    Local<Integer> ar_value = Integer::NewFromUnsigned(isolate,loop->active_reqs.count);
+    add_prop_to_ot(isolate,ot,"active_reqs",ar_value,PropertyAttribute::None);
+    ////void* internal_fields;
+    ////unsigned int stop_flag
+    Local<Integer> sf_value = Integer::NewFromUnsigned(isolate,loop->stop_flag);
+    add_prop_to_ot(isolate,ot,"stop_flag",sf_value,PropertyAttribute::None);
+    ////unsigned long flags
+    Local<BigInt> flags_value = BigInt::NewFromUnsigned(isolate,loop->flags);
+    add_prop_to_ot(isolate,ot,"flags",flags_value,PropertyAttribute::None);    
+    ////int backend_fd
+    Local<Integer> bf_value = Integer::New(isolate,loop->backend_fd);
+    add_prop_to_ot(isolate,ot,"backend_fd",bf_value,PropertyAttribute::None);
+    ////void* pending_queue[2]; 
+    ////void* watcher_queue[2];  
+    ////uv__io_t** watchers;   
+    ////unsigned int nwatchers;
+    Local<Integer> nw_value = Integer::NewFromUnsigned(isolate,loop->nwatchers);
+    add_prop_to_ot(isolate,ot,"nwatchers",nw_value,PropertyAttribute::None);       ////unsigned int nfds;    
+    Local<Integer> nfds = Integer::NewFromUnsigned(isolate,loop->nfds);
+    add_prop_to_ot(isolate,ot,"nfds",nfds,PropertyAttribute::None);    
+    //// void* wq[2];  
+    ////uv_mutex_t wq_mutex;  
+    //// uv_async_t wq_async;    
+    ////uv_rwlock_t cloexec_lock;    
+    ////uv_handle_t* closing_handles; 
+    ////void* process_handles[2];                                                  ////void* prepare_handles[2];                                           
+    ////void* check_handles[2];                                                    ////void* idle_handles[2];                                              
+    ////void* async_handles[2];                                                    ////void (*async_unused)(void); 
+    ////uv__io_t async_io_watcher; 
+    ////int async_wfd
+    Local<Integer> async_wfd = Integer::New(isolate,loop->async_wfd);
+    add_prop_to_ot(isolate,ot,"async_wfd",async_wfd,PropertyAttribute::None);
+    ////timer_heap
+    //    void*min
+    //    unsigned int nelts
+    ////uint64_t timer_counter   
+    Local<BigInt> tc = BigInt::NewFromUnsigned(isolate, loop->timer_counter);
+    add_prop_to_ot(isolate,ot,"timer_counter",tc,PropertyAttribute::None);
+    ////uint64_t  time
+    Local<BigInt> tm = BigInt::NewFromUnsigned(isolate, loop->time);
+    add_prop_to_ot(isolate,ot,"time",tm,PropertyAttribute::None);
+    ////uv__io_t signal_io_watcher;  
+    ////uv_signal_t child_watcher;   
+    ////int emfile_fd;  
+    Local<Integer> emfile_fd = Integer::New(isolate,loop->emfile_fd);
+    add_prop_to_ot(isolate,ot,"emfile_fd",emfile_fd,PropertyAttribute::None);
+    ////利用对象模板创建对象
+    MaybeLocal<Object> maybe_instance = ot->NewInstance(context);
+    Local<Object> o = maybe_instance.ToLocalChecked();
+    ////int signal_pipefd[2]
     Local<Value> signal_pipefd[2] = {
         Integer::New(isolate,loop->signal_pipefd[0]),
-        Integer::New(isolate,loop->signal_pipefd[1])
+        Integer::New(isolate,loop->signal_pipefd[1]),
     };
     Local<Array> sp = Array::New(isolate,signal_pipefd,2);
-    */
-    args.GetReturnValue().Set(ah);
+    Local<Name> sp_key = String::NewFromUtf8(isolate,"signal_pipefd", NewStringType::kNormal).ToLocalChecked();
+    o->DefineOwnProperty(context,sp_key,sp,PropertyAttribute::None).Check();
+    ////返回
+    args.GetReturnValue().Set(o);
 }
 
 

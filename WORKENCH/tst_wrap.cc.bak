@@ -1,0 +1,246 @@
+#include "tst_wrap.h"  
+#include "env-inl.h"  
+#include "util-inl.h"  
+#include "node_internals.h"  
+#include "node_errors.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+namespace node {
+    using v8::Context;  
+    using v8::Function;  
+    using v8::FunctionCallbackInfo;  
+    using v8::FunctionTemplate;  
+    using v8::Local;  
+    using v8::MaybeLocal;
+    using v8::Object;  
+    using v8::String;  
+    using v8::Value; 
+    using v8::Boolean;
+    using v8::Isolate;
+    using v8::NewStringType;
+    using v8::Name;
+
+    Queue::Queue(Environment* env, Local<Object> obj) {
+        obj->SetAlignedPointerInInternalField(Queue::InternalFields::kThis,nullptr);
+        obj->SetAlignedPointerInInternalField(Queue::InternalFields::kThis,this);
+        QUEUE_INIT(&(Queue::q));
+        obj->SetAlignedPointerInInternalField(Queue::InternalFields::kQueue,&(Queue::q));
+        printf("Get queue ptr.... %p,%p,%p\n",Queue::q,(Queue::q)[0],(Queue::q)[1] );
+
+    }
+
+    void Queue::New(const FunctionCallbackInfo<Value>& args) {
+        CHECK(args.IsConstructCall());
+        Environment* env = Environment::GetCurrent(args);
+        new Queue(env, args.Holder());
+    }
+    
+    void * Queue::GetQ(const FunctionCallbackInfo<Value>& args) {
+        Local<Object> obj = args.This();
+        void * qptr = Queue::get_q(obj);
+        return(qptr);
+    }
+
+    void Queue::GetThis(const FunctionCallbackInfo<Value>& args) {
+        Local<Object> obj = args.This();
+        args.GetReturnValue().Set(obj);
+    }
+
+
+    void Queue::IsEmpty(const FunctionCallbackInfo<Value>& args) {
+        Local<Object> self = args.Holder();
+        void* qptr = self->GetAlignedPointerFromInternalField(Queue::InternalFields::kQueue);
+        void *(*queue)[2] = static_cast<QUEUE*>(qptr);
+        bool ret = QUEUE_EMPTY(queue);
+        printf("empty %d",ret);
+    }
+
+    void Queue::GetNext(const FunctionCallbackInfo<Value>& args) {
+        Local<Object> self = args.Holder();
+        void* qptr = self->GetAlignedPointerFromInternalField(Queue::InternalFields::kQueue);
+        void *(*queue)[2] = static_cast<QUEUE*>(qptr);
+        printf("Get queue ptr.... %p\n", queue);
+        printf("Get queue[0] ptr.... %p\n", (*(*(&queue)))[0]);
+        printf("Get queue[1] ptr.... %p\n", (*(*(&queue)))[1]);
+        //void *(*ret)[2] = QUEUE_NEXT(&queue);
+        //printf("next %p",ret);
+        QUEUE q;
+        QUEUE_INIT(&q);
+        printf("Get q ptr.... %p\n", q);
+        printf("Get q[0] ptr.... %p\n", q[0]);
+        printf("Get q[1] ptr.... %p\n", q[1]);
+        bool ret = QUEUE_EMPTY(&q);
+        printf("q empty %d",ret); 
+
+    }
+
+
+    void Queue::InsertTail(const FunctionCallbackInfo<Value>& args) {
+        ////
+        Local<Object> self = args.Holder();
+        void* qptr = self->GetAlignedPointerFromInternalField(Queue::InternalFields::kQueue);
+        void *(*queue)[2] = static_cast<QUEUE*>(qptr);  
+        ////
+        Local<Object> nd = args[0].As<Object>();
+        qptr = nd-> GetAlignedPointerFromInternalField(Node::InternalFields::kQueue);
+        void *(*ndq)[2] = static_cast<QUEUE*>(qptr);
+        ////
+        QUEUE_INSERT_TAIL(queue,ndq);
+
+        printf("Get queue ptr.... %p\n", queue);
+        printf("Get ndq ptr.... %p\n", ndq);
+        printf("Get queue[0] ptr.... %p\n", queue[0]);
+        printf("Get queue[1] ptr.... %p\n", queue[1]);
+
+        //args.GetReturnValue().Set(nd); 
+    }
+
+    void Queue::InsertHead(const FunctionCallbackInfo<Value>& args) {
+        ////
+        Local<Object> self = args.Holder();
+        void* qptr = self->GetAlignedPointerFromInternalField(Queue::InternalFields::kQueue);
+        void *(*queue)[2] = static_cast<QUEUE*>(qptr);
+        ////
+        Local<Object> nd = args[0].As<Object>();
+        qptr = nd-> GetAlignedPointerFromInternalField(Node::InternalFields::kQueue);
+        void *(*ndq)[2] = static_cast<QUEUE*>(qptr);
+        ////
+        QUEUE_INSERT_HEAD(queue,ndq);
+
+        printf("Get queue ptr.... %p\n", queue);
+        printf("Get ndq ptr.... %p\n", ndq);
+        printf("Get queue[0] ptr.... %p\n", queue[0]);
+        printf("Get queue[1] ptr.... %p\n", queue[1]);
+
+        //args.GetReturnValue().Set(nd);
+    }
+
+
+    void Queue::MakeQueueCls(
+        Environment* env,
+        Local<Object> target
+    ) {
+        Local<FunctionTemplate> qt = Queue::setup_cls(env,Queue::New,10);
+        env->SetProtoMethod(qt, "getThis", Queue::GetThis);
+        env->SetProtoMethod(qt, "getNext", Queue::GetNext);
+        env->SetProtoMethod(qt, "isEmpty", Queue::IsEmpty);
+        env->SetProtoMethod(qt, "insertTail", Queue::InsertTail);
+        env->SetProtoMethod(qt, "insertHead", Queue::InsertHead);
+        Queue::add_cls(target,env,qt,"Queue");
+    }
+    ////////
+    Node::Node(Environment* env, Local<Object> obj) {
+        obj->SetAlignedPointerInInternalField(Node::InternalFields::kThis,this);
+        QUEUE_INIT(&(Node::q)); //宏参数要求按照数组
+        obj->SetAlignedPointerInInternalField(Node::InternalFields::kQueue,&(Node::q));            
+        printf("Get node ptr.... %p,%p,%p\n", &(Node::q),(Node::q)[0],(Node::q)[1]);
+    }
+    void Node::New(const FunctionCallbackInfo<Value>& args) {
+        CHECK(args.IsConstructCall());
+        Environment* env = Environment::GetCurrent(args);
+        new Node(env, args.Holder());
+    }
+    void * Node::GetQ(const FunctionCallbackInfo<Value>& args) {
+        Local<Object> obj = args.This();
+        void * qptr = Node::get_q(obj);
+        return(qptr);
+    }
+    void Node::GetThis(const FunctionCallbackInfo<Value>& args) {
+        Local<Object> obj = args.This();
+        args.GetReturnValue().Set(obj);
+    }
+    void Node::MakeNodeCls(
+        Environment* env,
+        Local<Object> target
+    ) {
+        Local<FunctionTemplate> nt = Node::setup_cls(env,Node::New,10);
+        env->SetProtoMethod(nt, "getThis", Node::GetThis);
+        Node::add_cls(target,env,nt,"Node");
+    }
+    void Node::Initialize(
+        Local<Object> target,
+        Local<Value> unused,
+        Local<Context> context,
+        void* priv
+    ) {
+        Environment* env = Environment::GetCurrent(context);
+        //Isolate* isolate = env->isolate();
+        Node::MakeNodeCls(env,target);
+    }
+    ////
+    Local<FunctionTemplate>  Node::setup_cls(
+        Environment* env,
+        void (*New) (const FunctionCallbackInfo<Value>& args),
+        int ifcount
+    ) {
+        //constructor
+        Isolate * isolate = env->isolate();
+        Local<FunctionTemplate> t = env->NewFunctionTemplate(New);
+        t->InstanceTemplate()->SetInternalFieldCount(ifcount);
+        return(t);
+    }
+    Local<FunctionTemplate>  Queue::setup_cls(
+        Environment* env,
+        void (*New) (const FunctionCallbackInfo<Value>& args),
+        int ifcount      
+    ) {
+        //constructor
+        Isolate * isolate = env->isolate();
+        Local<FunctionTemplate> t = env->NewFunctionTemplate(New);
+        t->InstanceTemplate()->SetInternalFieldCount(ifcount);
+        return(t);
+    }
+    void Node::add_cls(
+        Local<Object> target,
+        Environment* env,
+        Local<FunctionTemplate> t,
+        const char  *clsname
+    ){
+        Isolate * isolate = env->isolate();
+        Local<String> str = String::NewFromUtf8(isolate,clsname, NewStringType::kNormal).ToLocalChecked();
+        t->SetClassName(str);
+        target->Set(
+            env->context(),
+            str,
+            t->GetFunction(env->context()).ToLocalChecked()
+        ).Check();
+    }
+    void Queue::add_cls(
+        Local<Object> target,
+        Environment* env,    
+        Local<FunctionTemplate> t,
+        const char  *clsname
+    ){
+        Isolate * isolate = env->isolate();
+        Local<String> str = String::NewFromUtf8(isolate,clsname, NewStringType::kNormal).ToLocalChecked();
+        t->SetClassName(str);
+        target->Set(
+            env->context(),
+            str,
+            t->GetFunction(env->context()).ToLocalChecked()
+        ).Check();
+    }
+    void Queue::Initialize(
+        Local<Object> target,
+        Local<Value> unused,
+        Local<Context> context,
+        void* priv
+    ) {
+        Environment* env = Environment::GetCurrent(context);
+        //Isolate* isolate = env->isolate();
+        Queue::MakeQueueCls(env,target);
+    }
+    void Initall(
+        Local<Object> target,
+        Local<Value> unused,
+        Local<Context> context,
+        void* priv
+    ) {
+        Queue::Initialize(target,unused,context,priv);
+        Node::Initialize(target,unused,context,priv);
+    }
+}
+
+NODE_MODULE_CONTEXT_AWARE_INTERNAL(tst_wrap, node::Initall)  

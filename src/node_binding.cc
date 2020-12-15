@@ -98,7 +98,7 @@
 
 //extended customer module
 #define NODE_BUILTIN_EXTEND_MODULES(V)\
-    V(tst_wrap)
+    V(uvqueue)
 
 
 

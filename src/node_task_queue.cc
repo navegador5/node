@@ -28,6 +28,9 @@ using v8::Promise;
 using v8::PromiseRejectEvent;
 using v8::PromiseRejectMessage;
 using v8::Value;
+using v8::MicrotaskQueue;
+using v8::FunctionTemplate;
+
 
 void PromiseRejectCallback(PromiseRejectMessage message) {
   static std::atomic<uint64_t> unhandledRejections{0};
@@ -90,6 +93,18 @@ void PromiseRejectCallback(PromiseRejectMessage message) {
 }
 namespace task_queue {
 
+/*
+static void GetMicrotaskQueue(
+    const FunctionCallbackInfo<Value>& args
+) {
+    Environment* env = Environment::GetCurrent(args);
+    Isolate* isolate = env->isolate();
+    env->microtask_queue_ctor_template();
+    //isolate->SetMicrotasksPolicy(v8::MicrotasksPolicy::kExplicit);
+    //ToV8Value(context,string/number/vector/map,isolate=nullptr)
+}
+*/
+
 static void EnqueueMicrotask(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   Isolate* isolate = env->isolate();
@@ -127,6 +142,10 @@ static void Initialize(Local<Object> target,
   env->SetMethod(target, "enqueueMicrotask", EnqueueMicrotask);
   env->SetMethod(target, "setTickCallback", SetTickCallback);
   env->SetMethod(target, "runMicrotasks", RunMicrotasks);
+  ////
+  ////env->SetMethod(target, "getMicrotaskQueue", GetMicrotaskQueue);
+  ////
+
   target->Set(env->context(),
               FIXED_ONE_BYTE_STRING(isolate, "tickInfo"),
               env->tick_info()->fields().GetJSArray()).Check();
@@ -149,6 +168,7 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   registry->Register(EnqueueMicrotask);
   registry->Register(SetTickCallback);
   registry->Register(RunMicrotasks);
+  ////registry->Register(GetMicrotaskQueue);
   registry->Register(SetPromiseRejectCallback);
 }
 
