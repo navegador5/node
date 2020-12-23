@@ -98,8 +98,8 @@
 
 //extended customer module
 #define NODE_BUILTIN_EXTEND_MODULES(V)\
-    V(uvqueue)
-
+    V(uvqueue)\
+    V(nv8_util)
 
 
 
